@@ -1,5 +1,6 @@
 package org.zalando.logbook.servlet;
 
+import jakarta.annotation.Nullable;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -14,9 +15,7 @@ import org.zalando.logbook.Logbook.ResponseProcessingStage;
 import org.zalando.logbook.Logbook.ResponseWritingStage;
 import org.zalando.logbook.Strategy;
 
-import jakarta.annotation.Nullable;
 import java.io.IOException;
-import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -56,7 +55,6 @@ public final class LogbookFilter implements HttpFilter {
     @Override
     public void doFilter(final HttpServletRequest httpRequest, final HttpServletResponse httpResponse,
                          final FilterChain chain) throws ServletException, IOException {
-
         final RemoteRequest request = new RemoteRequest(httpRequest, formRequestMode);
         final LocalResponse response = new LocalResponse(httpResponse, request.getProtocolVersion());
 
@@ -70,16 +68,20 @@ public final class LogbookFilter implements HttpFilter {
         }
 
         final ResponseWritingStage writing = processing.process(response);
-        request.setAsyncListener(Optional.of(new LogbookAsyncListener(event -> write(request, response, writing))));
         request.setAttribute(responseWritingStageSynchronizationName, new AtomicBoolean(false));
 
         chain.doFilter(request, response);
 
         if (request.isAsyncStarted()) {
+            request.getAsyncContext().addListener(new LogbookAsyncListener(event -> write(request, response, writing)));
+
             return;
         }
 
-        write(request, response, writing);
+        // The async writing is handled by the attached on-complete listener
+        if (request.getDispatcherType() != ASYNC) {
+            write(request, response, writing);
+        }
     }
 
     private void write(RemoteRequest request, LocalResponse response, ResponseWritingStage writing) throws IOException {
