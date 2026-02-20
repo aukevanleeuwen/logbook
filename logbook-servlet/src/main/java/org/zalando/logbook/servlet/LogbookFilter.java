@@ -17,7 +17,6 @@ import org.zalando.logbook.Strategy;
 
 import java.io.IOException;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 import static jakarta.servlet.DispatcherType.ASYNC;
 import static lombok.AccessLevel.PRIVATE;
@@ -28,13 +27,13 @@ import static org.apiguardian.api.API.Status.STABLE;
 public final class LogbookFilter implements HttpFilter {
 
     /**
-     * Unique per instance so we don't accidentally share stages between filter
+     * Unique per instance, so we don't accidentally share stages between filter
      * instances in the same chain.
      */
     private final String responseProcessingStageName = ResponseProcessingStage.class.getName() + "-" + UUID.randomUUID();
-    private final String responseWritingStageSynchronizationName = ResponseWritingStage.class.getName() + "-Synchronization-"+ UUID.randomUUID();
 
     private final Logbook logbook;
+    @Nullable
     private final Strategy strategy;
 
     @With
@@ -68,32 +67,28 @@ public final class LogbookFilter implements HttpFilter {
         }
 
         final ResponseWritingStage writing = processing.process(response);
-        request.setAttribute(responseWritingStageSynchronizationName, new AtomicBoolean(false));
 
         chain.doFilter(request, response);
 
         if (request.isAsyncStarted()) {
-            request.getAsyncContext().addListener(new LogbookAsyncListener(event -> write(request, response, writing)));
+            request.getAsyncContext().addListener(new LogbookAsyncListener(event -> write(response, writing)));
 
             return;
         }
 
         // The async writing is handled by the attached on-complete listener
         if (request.getDispatcherType() != ASYNC) {
-            write(request, response, writing);
+            write(response, writing);
         }
     }
 
-    private void write(RemoteRequest request, LocalResponse response, ResponseWritingStage writing) throws IOException {
-        final AtomicBoolean attribute = (AtomicBoolean) request.getAttribute(responseWritingStageSynchronizationName);
-        if (attribute != null && !attribute.getAndSet(true)) {
-            try {
-                response.flushBuffer();
-            } catch (IOException e) {
-                // ignore and try to log the response anyway
-            }
-            writing.write();
+    private void write(LocalResponse response, ResponseWritingStage writing) throws IOException {
+        try {
+            response.flushBuffer();
+        } catch (IOException e) {
+            // ignore and try to log the response anyway
         }
+        writing.write();
     }
 
     private RequestWritingStage process(
